@@ -1,11 +1,12 @@
 ################################################################################################################################ #
 ## Load dependencies ----     
 
-library(DeconRNASeq)
-library(e1071)
-library(parallel)
-library(preprocessCore)
-
+load.deps <- function() {
+  library(DeconRNASeq)
+  library(e1071)
+  library(parallel)
+  library(preprocessCore)
+}
 
 ################################################################################################################################ #
 ## Functions ----     
@@ -73,15 +74,12 @@ write.gof <- function(measuredExp, estimatedComp, signatureUsed, returnPred = FA
     return(res)
 }
 
-
 ## Code to run CIBERSORT
-run.CIB <- function(mixture, signature) {
+run.CIB <- function(mixture, signature, interruptCallback, progressSet, progressStart, progressScale) {
 
-    # run CIB
-    res <- CIBERSORT(sig_matrix = signature, mixture_file = mixture)
+  # run CIB
+  res <- CIBERSORT(sig_matrix=signature, mixture_file=mixture, interruptCallback=interruptCallback, progressSet=progressSet, progressStart=progressStart, progressScale=progressScale)
     
-    
-  
   # reformat
   res <- as.data.frame(res)
   res <- res[,1:(ncol(res) - 3)] # Note1: This removes some of CIBERSORT's output that is extraneous (for our purposes)
@@ -140,9 +138,9 @@ run.DRS <- function(mixture, signature) {
     
     
     #dependencies
-    library(e1071)
-    library(parallel)
-    library(preprocessCore)
+    #library(e1071)
+    #library(parallel)
+    #library(preprocessCore)
     
     #Core algorithm
     CoreAlg <- function(X, y, absolute, abs_method){
@@ -224,8 +222,8 @@ run.DRS <- function(mixture, signature) {
     
     #main function
     ## Note: GJS modified this function to no longer need to read in matrices from a file, but instead using variables loaded into the workspace
-    
-    CIBERSORT <- function(sig_matrix, mixture_file, perm=0, QN=TRUE, absolute=FALSE, abs_method='sig.score'){
+    ## Note: KAW modified this function for shiny progress bar and to fix duplicates
+    CIBERSORT <- function(sig_matrix, mixture_file, perm=0, QN=TRUE, absolute=FALSE, abs_method='sig.score', interruptCallback=function(){}, progressSet=function(){}, progressStart=0.0, progressScale=1.0){
       
       if(absolute && abs_method != 'no.sumto1' && abs_method != 'sig.score') stop("abs_method must be set to either 'sig.score' or 'no.sumto1'")
       
@@ -290,7 +288,13 @@ run.DRS <- function(mixture, signature) {
       pval <- 9999
       
       #iterate through mixtures
+      time.eta <- "This step can take a while"
       while(itor <= mixtures){
+        start.time <- Sys.time()
+        
+        interruptCallback()
+
+        progressSet(value=progressStart + progressScale * (itor-1) / mixtures, message="Step 2/3: Running CIBERSORT", detail=sprintf("%s, please DO NOT refresh or close the page", time.eta))
         
         y <- Y[,itor]
         
@@ -319,11 +323,13 @@ run.DRS <- function(mixture, signature) {
         else {output <- rbind(output, out)}
         
         itor <- itor + 1
-        
+
+        end.time <- Sys.time()
+        time.eta <- sprintf("ETA: %s", format((end.time - start.time) * (mixtures - itor + 1), format="%H:%M:%S"))
       }
       
       #save results
-      write.table(rbind(header,output), file="CIBERSORT-Results.txt", sep="\t", row.names=F, col.names=F, quote=F)
+      #write.table(rbind(header,output), file="CIBERSORT-Results.txt", sep="\t", row.names=F, col.names=F, quote=F)
       
       #return matrix object containing all results
       obj <- rbind(header,output)

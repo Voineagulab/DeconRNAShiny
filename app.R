@@ -1,62 +1,155 @@
-library(shiny)
-library(vroom)
+library("shiny")
+library("shinyjs")
+library("ipc")
+library("future")
+library("ggplot2")
+library("promises")
 
-shinyApp(
-    ui = shinyUI(fluidPage(
-        titlePanel("DeconRNAShiny"),
-        sidebarLayout(
-            #Sidebar with inputs
-            sidebarPanel(
-                selectInput("signature", "Signature:",
+if(Sys.info()['sysname'] == "Windows") {
+    plan(multisession) # forks process so uses > 1GB memory
+} else {
+    plan(multicore) # not available on windows
+}
+
+#Provides "sigsBrain"
+load("Signatures - Brain.rda")
+
+allSignatures <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
+allTissues <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
+steps <- c(0.1, 0.8, 0.1)
+steps_start <- c(0.0, 0.1, 0.9)
+
+# Runs deconvolution pipeline with simple progress and interruption callbacks
+source("core.R")
+accessibleAnalysisFunction <- function(mixture, signature, interruptCallback, progressSet) {
+    load.deps()
+
+    # Step 1/3: Running DeconRNASeq
+    interruptCallback()
+    progressSet(value=steps_start[1], message="Step 1/3: Running DeconRNASeq")
+    x <- run.DRS(mixture,signature)
+
+    # Step 2/3: Running CIBERSORT
+    y <- run.CIB(mixture,signature,interruptCallback,progressSet,steps_start[2],steps[2])
+
+    # Step 3/3 Calculating GoFs
+    interruptCallback()
+    progressSet(value=steps_start[3], message="Step 3/3 Calculating GoFs")
+    x2 <- write.gof(mixture, x, signature)
+    y2 <- write.gof(mixture, y, signature)
+
+    progressSet(value=1.0, message="Done")
+    results <- data.frame(algorithm=append(rep("DeconRNASeq", ncol(mixture)), rep("CIBERSORT", ncol(mixture))), r=append(x2$r, y2$r))
+    ggplot(results, aes(x=algorithm, y=r, fill=algorithm)) + geom_violin()
+
+    return(results)
+}
+
+# Shiny UI
+ui <- fluidPage(
+    useShinyjs(),
+    titlePanel("DeconRNAShiny"),
+    sidebarLayout(
+        sidebarPanel(
+            selectInput("signature", "Signature:",
                     allSignatures, 
                     multiple=FALSE),
-                selectInput("tissues", "Tissues:",
-                    allTissues, 
-                    selected=allTissues,
-                    multiple=TRUE),
-                fileInput("file", NULL, accept = c(".csv", ".tsv")),
-
-                numericInput("m", "Number of samples:", 0, min = 0, max = 100),
-                actionButton("do", "Start")
-            ),
-
-            #Show a plot of the generated distribution
-            mainPanel(
-                plotOutput("hist")
+            selectInput("tissues", "Tissues:",
+                allTissues, 
+                selected=allTissues,
+                multiple=TRUE),
+            fileInput("file", "Mixture:", accept = c(".csv", ".tsv")),
+            
+            fluidRow(
+                column(width = 12, align="center",
+                    actionButton('run', 'run', width='40%'),
+                    actionButton('cancel', 'cancel', width='40%')
+                ),
             )
+        ),
+        mainPanel(
+            plotOutput("violin")
         )
-    )),
-
-    server = function(input, output, session) {
-        #File updater to prevent rereading of file every time "signal" is changed
-        fUpdate <- reactive({
-            validate(need(input$file, 'No file; Please upload a .csv or.tsv file'))
-            ext <- tools::file_ext(input$file$name)
-            switch(ext,
-                csv = vroom::vroom(input$file$datapath, delim = ","),
-                tsv = vroom::vroom(input$file$datapath, delim = "\t"),
-                validate("Invalid file; Please upload a .csv or .tsv file")
-            )
-        })
-
-        #Mean updater on button press
-        mUpdate <- eventReactive(input$do, {
-            validate(need(input$m != 0, 'Invalid sample; Please choose a sample > 0'))
-            replicate(1e4, mean(runif(input$m)))
-        })
-
-        output$hist <- renderPlot({
-            file <- fUpdate()
-            means <- mUpdate()
-            hist(means, breaks = 20, main="Placeholder Histogram")
-        }, res = 96)
-    }
+    )
 )
 
-# TODO:
-# source(core.R)
-# x <- run.DRS(mixture,signature)
-# y <- run.CIB(mixture,signature)
-# x2 <- write.gof(mixture, x, signature)
-# y2 <- write.gof(mixture, y, signature)
-# For long computation see https://shiny.rstudio.com/articles/bookmarking-state.html 
+# Shiny server
+server <- function(input, output, session) {
+    inter <- AsyncInterruptor$new()
+    
+    result_val <- reactiveVal()
+    is_running <- reactiveVal(FALSE)
+
+    # React to changes in is_running
+    is_running_observer <- observe({
+        toggleState("run", !is_running())
+        toggleState("cancel", is_running())
+    })
+
+    sigUpdate <- reactive({
+        mask <- intersect(input$tissues, colnames(sigsBrain[[input$signature]]))
+        sigsBrain[[input$signature]][mask]
+    })
+
+    # Handle cancel button click
+    observeEvent(input$cancel,{
+        if(!is_running()) return(NULL)
+
+        disable("cancel")
+        showNotification("cancel request sent to server")
+        inter$interrupt("cancelled")
+    })
+
+    # Handle run button click
+    observeEvent(input$run,{
+        if(is_running() || !mixUpdate()) return(NULL)
+        is_running(TRUE)
+
+        progress <- AsyncProgress$new(message="Initializing", min=0.0, max=1.0, value=0.0)
+        sig <- sigUpdate()
+        mix <- mixUpdate()
+
+        promises::future_promise({
+            accessibleAnalysisFunction(mix, sig, inter$execInterrupts, progress$set)
+        }) %>% then(
+            onFulfilled = function(value) {
+                result_val(value)
+            },
+            onRejected = function(err) {
+                showNotification(err$message)
+            }
+        ) %>% finally(function() {
+            # Hide loading bar whether it finished or not
+            progress$close()
+            is_running(FALSE)
+        })
+
+        # Return something other than the future so we don't block the UI
+        return(NULL)
+    })
+
+    #File updater to prevent rereading of file every time "signal" is changed
+    mixUpdate <- reactive({
+        validate(need(input$file, 'No file; Please upload a .csv or.tsv file'))
+        ext <- tools::file_ext(input$file$name)
+        switch(ext,
+            csv = read.table(input$file$datapath, sep=",", header=TRUE, row.names=1),
+            tsv = read.table(input$file$datapath, sep="\t", header=TRUE, row.names=1),
+            validate("Invalid file; Please upload a .csv or .tsv file")
+        )
+    })
+
+    # Render output
+    output$violin <- renderPlot({
+        req(result_val())
+        ggplot(result_val(), aes(x=algorithm, y=r, fill=algorithm)) + geom_violin()
+    }, res = 96)
+
+    # Clean up ipc interruptor
+    session$onSessionEnded(function() {
+        inter$destroy()
+    })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
