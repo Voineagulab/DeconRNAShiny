@@ -18,6 +18,7 @@ allSignatures <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
 allTissues <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
 steps <- c(0.1, 0.8, 0.1)
 steps_start <- c(0.0, 0.1, 0.9)
+empty <- list(data.frame(), data.frame(), data.frame(algorithm=c("CIBERSORT", "CIBERSORT", "CIBERSORT", "DeconRNASeq", "DeconRNASeq", "DeconRNASeq"), r=c(0, 0, 0, 0, 0, 0)))
 
 # Runs deconvolution pipeline with simple progress and interruption callbacks
 source("core.R")
@@ -39,8 +40,7 @@ accessibleAnalysisFunction <- function(mixture, signature, interruptCallback, pr
     y2 <- write.gof(mixture, y, signature)
 
     progressSet(value=1.0, message="Done")
-    results <- data.frame(algorithm=append(rep("DeconRNASeq", ncol(mixture)), rep("CIBERSORT", ncol(mixture))), r=append(x2$r, y2$r))
-    ggplot(results, aes(x=algorithm, y=r, fill=algorithm)) + geom_violin()
+    results <- list(x, y, data.frame(algorithm=append(rep("DeconRNASeq", ncol(mixture)), rep("CIBERSORT", ncol(mixture))), r=append(x2$r, y2$r)))
 
     return(results)
 }
@@ -52,23 +52,31 @@ ui <- fluidPage(
     sidebarLayout(
         sidebarPanel(
             selectInput("signature", "Signature:",
-                    allSignatures, 
-                    multiple=FALSE),
+                    allSignatures),
             selectInput("tissues", "Tissues:",
                 allTissues, 
                 selected=allTissues,
                 multiple=TRUE),
             fileInput("file", "Mixture:", accept = c(".csv", ".tsv")),
             
+            p(strong("Run Deconvolution:")),
+
             fluidRow(
                 column(width = 12, align="center",
-                    actionButton('run', 'run', width='40%'),
-                    actionButton('cancel', 'cancel', width='40%')
+                    actionButton('run', 'run', width='45%'),
+                    actionButton('cancel', 'cancel', width='45%')
                 ),
-            )
+            ),
         ),
         mainPanel(
-            plotOutput("violin")
+            fluidRow(
+                column(width = 12, align="right",
+                    downloadButton('getX', 'x', icon=icon("file-text")),
+                    downloadButton('getY', 'y', icon=icon("file-text")),
+                    downloadButton('getPlot', 'plot', icon = icon("download"))
+                )
+            ),
+            plotOutput("violin"),
         )
     )
 )
@@ -77,7 +85,7 @@ ui <- fluidPage(
 server <- function(input, output, session) {
     inter <- AsyncInterruptor$new()
     
-    result_val <- reactiveVal()
+    result_val <- reactiveVal(empty)
     is_running <- reactiveVal(FALSE)
 
     # React to changes in is_running
@@ -87,6 +95,7 @@ server <- function(input, output, session) {
     })
 
     sigUpdate <- reactive({
+        #TODO: ensure there are at least 2 tissues
         mask <- intersect(input$tissues, colnames(sigsBrain[[input$signature]]))
         sigsBrain[[input$signature]][mask]
     })
@@ -139,11 +148,32 @@ server <- function(input, output, session) {
         )
     })
 
+    # Update plot for rendering and downloading
+    plotOutput <- reactive({
+        req(result_val())
+        ggplot(result_val()[[3]], aes(x=algorithm, y=r, fill=algorithm)) + geom_violin()
+    })
+
     # Render output
     output$violin <- renderPlot({
-        req(result_val())
-        ggplot(result_val(), aes(x=algorithm, y=r, fill=algorithm)) + geom_violin()
+        plotOutput()
     }, res = 96)
+
+    # Downloading files
+    output$getX <- downloadHandler(
+        filename = function() {"x.csv"},
+        content = function(file) {write.csv(result_val()[[1]], file)}
+    )
+    output$getY <- downloadHandler(
+        filename = function() {"y.csv"},
+        content = function(file) {write.csv(result_val()[[2]], file)}
+    )
+
+    # Downloading plot
+    output$getPlot <- downloadHandler(
+        filename = function() {"plot.png"},
+        content = function(file) {ggsave(file, plot = plotOutput(), device = "png")}
+    )
 
     # Clean up ipc interruptor
     session$onSessionEnded(function() {
