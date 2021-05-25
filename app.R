@@ -16,7 +16,7 @@ if(Sys.info()['sysname'] == "Windows") {
 load("Signatures - Brain.rda")
 
 allSig <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
-allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
+allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia", "OPCs", "Excitatory", "Inhibatory")
 allAlg <- c("DeconRNASeq", "CIBERSORT")
 steps <- c(0.1, 0.8, 0.1)
 stepsStart <- c(0.0, 0.1, 0.9)
@@ -64,16 +64,21 @@ ui <- fluidPage(
 
     #Fixes fading out of placeholder when "All" selected
     tags$style(".bs-placeholder {color: #000000 !important;}"),
+    tags$head(tags$style("#violin{height:80vh !important;}")),
 
     titlePanel("BrainDeconvShiny"),
     sidebarLayout(
         sidebarPanel(
+            div(img(src="ShinyAppFig.jpg",width="80%"), style="text-align: center;"),
+            h5('Shiny web app that takes a user defined expression matrix "mixture", the name of a predefined "signal" and finally a brain tissue subset in order to compare DeconRNASeq and CIBERSORT constituting cell type predictions.'),
+            br(),
             selectInput("signature", "Signature:",
                     allSig),
             pickerInput("celltypes", "Cell types:",
                 allCT, 
                 multiple=TRUE,
                 selected=character(0),
+                choicesOpt=list(disabled = allCT %in% c("Neurons")),
                 options=pickerOptions(noneSelectedText = "All")
             ),
             pickerInput("algorithms", "Algorithms:",
@@ -119,12 +124,38 @@ server <- function(input, output, session) {
         toggleState("cancel", is_running())
     })
 
-    sigUpdate <- reactive({
-        cts <- input$celltypes
-        if(!isTruthy(cts)) cts <- allCT
-        
-        mask <- intersect(cts, colnames(sigsBrain[[input$signature]]))
-        return(sigsBrain[[input$signature]][mask])
+    sig <- NULL
+    observeEvent(c(input$signature, input$celltypes), {
+        # Get vector of selected (character(0) if all)
+        selectedCT <- newSelectedCT <- input$celltypes
+
+        # Convert character(0) to all
+        if(!isTruthy(selectedCT)) selectedCT <- allCT
+
+        enabledCT <- colnames(sigsBrain[[input$signature]])
+        disabledCT <- !allCT %in% enabledCT
+        maskCT <- intersect(selectedCT, enabledCT)
+
+        #TODO: errors if only one selected
+        if(!length(maskCT)) {
+            # Default to all cell types if all user selections are disabled
+            maskCT <- allCT
+            newSelectedCT <- character(0)
+        } 
+        # else if(setequal(maskCT,enabledCT)) {
+        #     # Default to all cell types if user selected all possible options (but save selection?)
+        #     newSelectedCT <- character(0)
+        # }
+
+        #Update cell type dropdown based on signature
+        updatePickerInput(
+            session=session, inputId="celltypes",
+            choices = allCT,
+            selected=newSelectedCT,
+            #choicesOpt=list(disabled = allCT %in% c("Astrocytes"))
+            choicesOpt=list(disabled = disabledCT)
+        )
+        sig <<- sigsBrain[[input$signature]][maskCT]
     })
 
     algUpdate <- reactive({
@@ -148,9 +179,9 @@ server <- function(input, output, session) {
         is_running(TRUE)
 
         progress <- AsyncProgress$new(message="Initializing", min=0.0, max=1.0, value=0.0)
-        sig <- sigUpdate()
         mix <- mixUpdate()
         algs <- algUpdate()
+        print(sig)
 
         promises::future_promise({
             accessibleAnalysisFunction(mix, sig, algs, inter$execInterrupts, progress$set)
@@ -183,14 +214,14 @@ server <- function(input, output, session) {
     })
 
     # Update plot for rendering and downloading
-    plotOutput <- reactive({
+    violinOutput <- reactive({
         req(result_val())
         ggplot(result_val()[[3]], aes(x=Algorithm, y=r, fill=Algorithm)) + geom_violin() + labs(y = "Goodness of fit (r)")
     })
 
     # Render output
     output$violin <- renderPlot({
-        plotOutput()
+        violinOutput()
     }, res = 96)
 
     # Showing download buttons
@@ -213,7 +244,7 @@ server <- function(input, output, session) {
     # Downloading plot
     output$getPlot <- downloadHandler(
         filename = function() {"plot.png"},
-        content = function(file) {ggsave(file, plot = plotOutput(), device = "png")}
+        content = function(file) {ggsave(file, plot = violinOutput(), device = "png")}
     )
 
     # Clean up ipc interruptor
