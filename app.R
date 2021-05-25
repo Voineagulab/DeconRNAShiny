@@ -1,9 +1,10 @@
-library("shiny")
-library("shinyjs")
-library("ipc")
-library("future")
-library("ggplot2")
-library("promises")
+library(shiny)
+library(shinyWidgets)
+library(shinyjs)
+library(ipc)
+library(future)
+library(ggplot2)
+library(promises)
 
 if(Sys.info()['sysname'] == "Windows") {
     plan(multisession) # forks process so uses > 1GB memory
@@ -14,33 +15,45 @@ if(Sys.info()['sysname'] == "Windows") {
 #Provides "sigsBrain"
 load("Signatures - Brain.rda")
 
-allSignatures <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
-allTissues <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
+allSig <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
+allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
+allAlg <- c("DeconRNASeq", "CIBERSORT")
 steps <- c(0.1, 0.8, 0.1)
-steps_start <- c(0.0, 0.1, 0.9)
-empty <- list(data.frame(), data.frame(), data.frame(algorithm=c("CIBERSORT", "CIBERSORT", "CIBERSORT", "DeconRNASeq", "DeconRNASeq", "DeconRNASeq"), r=c(0, 0, 0, 0, 0, 0)))
+stepsStart <- c(0.0, 0.1, 0.9)
+empty <- list(NULL, NULL, data.frame(Algorithm=append(rep(allAlg[1], 3), rep(allAlg[2], 3)), r=rep(0, 6)))
 
 # Runs deconvolution pipeline with simple progress and interruption callbacks
 source("core.R")
-accessibleAnalysisFunction <- function(mixture, signature, interruptCallback, progressSet) {
+accessibleAnalysisFunction <- function(mixture, signature, algorithms, interruptCallback, progressSet) {
     load.deps()
 
-    # Step 1/3: Running DeconRNASeq
-    interruptCallback()
-    progressSet(value=steps_start[1], message="Step 1/3: Running DeconRNASeq")
-    x <- run.DRS(mixture,signature)
+    totalSteps = length(algorithms) + 1
+    currStep = 1
 
-    # Step 2/3: Running CIBERSORT
-    y <- run.CIB(mixture,signature,interruptCallback,progressSet,steps_start[2],steps[2])
+    x <- y <- x2 <- y2 <- NULL
+
+    if(is.element("DeconRNASeq", algorithms)) {
+        # Step 1/3: Running DeconRNASeq
+        interruptCallback()
+        progressSet(value=stepsStart[1], message=sprintf("Step %d/%d: Running DeconRNASeq", currStep, totalSteps))
+        x <- run.DRS(mixture,signature)
+        currStep <- currStep + 1
+    }
+
+    if(is.element("CIBERSORT", algorithms)) {
+         # Step 2/3: Running CIBERSORT
+        y <- run.CIB(mixture,signature,interruptCallback,progressSet,stepsStart[2],steps[2], currStep, totalSteps)
+        currStep <- currStep + 1
+    }
 
     # Step 3/3 Calculating GoFs
     interruptCallback()
-    progressSet(value=steps_start[3], message="Step 3/3 Calculating GoFs")
-    x2 <- write.gof(mixture, x, signature)
-    y2 <- write.gof(mixture, y, signature)
+    progressSet(value=stepsStart[3], message=sprintf("Step %d/%d Calculating GoFs", currStep, totalSteps))
+    if(isTruthy(x)) x2 <- write.gof(mixture, x, signature)
+    if(isTruthy(y)) y2 <- write.gof(mixture, y, signature)
 
     progressSet(value=1.0, message="Done")
-    results <- list(x, y, data.frame(algorithm=append(rep("DeconRNASeq", ncol(mixture)), rep("CIBERSORT", ncol(mixture))), r=append(x2$r, y2$r)))
+    results <- list(x, y, data.frame(Algorithm=append(rep("DeconRNASeq", length(x2$r)), rep("CIBERSORT", length(y2$r))), r=append(x2$r, y2$r)))
 
     return(results)
 }
@@ -48,15 +61,27 @@ accessibleAnalysisFunction <- function(mixture, signature, interruptCallback, pr
 # Shiny UI
 ui <- fluidPage(
     useShinyjs(),
-    titlePanel("DeconRNAShiny"),
+
+    #Fixes fading out of placeholder when "All" selected
+    tags$style(".bs-placeholder {color: #000000 !important;}"),
+
+    titlePanel("BrainDeconvShiny"),
     sidebarLayout(
         sidebarPanel(
             selectInput("signature", "Signature:",
-                    allSignatures),
-            selectInput("tissues", "Tissues:",
-                allTissues, 
-                selected=allTissues,
-                multiple=TRUE),
+                    allSig),
+            pickerInput("celltypes", "Cell types:",
+                allCT, 
+                multiple=TRUE,
+                selected=character(0),
+                options=pickerOptions(noneSelectedText = "All")
+            ),
+            pickerInput("algorithms", "Algorithms:",
+                allAlg,
+                multiple=TRUE,
+                selected=character(0),
+                options=pickerOptions(noneSelectedText = "All")
+            ),
             fileInput("file", "Mixture:", accept = c(".csv", ".tsv")),
             
             p(strong("Run Deconvolution:")),
@@ -71,8 +96,8 @@ ui <- fluidPage(
         mainPanel(
             fluidRow(
                 column(width = 12, align="right",
-                    downloadButton('getX', 'x', icon=icon("file-text")),
-                    downloadButton('getY', 'y', icon=icon("file-text")),
+                    downloadButton('getDeconRNASeq', 'DeconRNASeq', icon=icon("file-text")),
+                    downloadButton('getCIBERSORT', 'CIBERSORT', icon=icon("file-text")),
                     downloadButton('getPlot', 'plot', icon = icon("download"))
                 )
             ),
@@ -84,7 +109,7 @@ ui <- fluidPage(
 # Shiny server
 server <- function(input, output, session) {
     inter <- AsyncInterruptor$new()
-    
+
     result_val <- reactiveVal(empty)
     is_running <- reactiveVal(FALSE)
 
@@ -95,9 +120,17 @@ server <- function(input, output, session) {
     })
 
     sigUpdate <- reactive({
-        #TODO: ensure there are at least 2 tissues
-        mask <- intersect(input$tissues, colnames(sigsBrain[[input$signature]]))
-        sigsBrain[[input$signature]][mask]
+        cts <- input$celltypes
+        if(!isTruthy(cts)) cts <- allCT
+        
+        mask <- intersect(cts, colnames(sigsBrain[[input$signature]]))
+        return(sigsBrain[[input$signature]][mask])
+    })
+
+    algUpdate <- reactive({
+        algs <- input$algorithms
+        if(!isTruthy(algs)) algs <- allAlg
+        return(algs)
     })
 
     # Handle cancel button click
@@ -117,9 +150,10 @@ server <- function(input, output, session) {
         progress <- AsyncProgress$new(message="Initializing", min=0.0, max=1.0, value=0.0)
         sig <- sigUpdate()
         mix <- mixUpdate()
+        algs <- algUpdate()
 
         promises::future_promise({
-            accessibleAnalysisFunction(mix, sig, inter$execInterrupts, progress$set)
+            accessibleAnalysisFunction(mix, sig, algs, inter$execInterrupts, progress$set)
         }) %>% then(
             onFulfilled = function(value) {
                 result_val(value)
@@ -151,7 +185,7 @@ server <- function(input, output, session) {
     # Update plot for rendering and downloading
     plotOutput <- reactive({
         req(result_val())
-        ggplot(result_val()[[3]], aes(x=algorithm, y=r, fill=algorithm)) + geom_violin()
+        ggplot(result_val()[[3]], aes(x=Algorithm, y=r, fill=Algorithm)) + geom_violin() + labs(y = "Goodness of fit (r)")
     })
 
     # Render output
@@ -159,13 +193,20 @@ server <- function(input, output, session) {
         plotOutput()
     }, res = 96)
 
+    # Showing download buttons
+    result_val_observer <- observe({
+        toggleState("getDeconRNASeq", result_val()[[1]])
+        toggleState("getCIBERSORT", result_val()[[2]])
+        toggleState("getPlot", result_val()[[1]] != NULL || result_val()[[2]] != NULL)
+    })
+
     # Downloading files
-    output$getX <- downloadHandler(
-        filename = function() {"x.csv"},
+    output$getDeconRNASeq <- downloadHandler(
+        filename = function() {"DeconRNASeq.csv"},
         content = function(file) {write.csv(result_val()[[1]], file)}
     )
-    output$getY <- downloadHandler(
-        filename = function() {"y.csv"},
+    output$getCIBERSORT <- downloadHandler(
+        filename = function() {"CIBERSORT.csv"},
         content = function(file) {write.csv(result_val()[[2]], file)}
     )
 

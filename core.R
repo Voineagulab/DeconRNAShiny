@@ -75,10 +75,10 @@ write.gof <- function(measuredExp, estimatedComp, signatureUsed, returnPred = FA
 }
 
 ## Code to run CIBERSORT
-run.CIB <- function(mixture, signature, interruptCallback, progressSet, progressStart, progressScale) {
+run.CIB <- function(mixture, signature, interruptCallback, progressSet, progressStart, progressScale, currStep, totalSteps) {
 
   # run CIB
-  res <- CIBERSORT(sig_matrix=signature, mixture_file=mixture, interruptCallback=interruptCallback, progressSet=progressSet, progressStart=progressStart, progressScale=progressScale)
+  res <- CIBERSORT(sig_matrix=signature, mixture_file=mixture, interruptCallback=interruptCallback, progressSet=progressSet, progressStart=progressStart, progressScale=progressScale, currStep=currStep, totalSteps=totalSteps)
     
   # reformat
   res <- as.data.frame(res)
@@ -223,7 +223,7 @@ run.DRS <- function(mixture, signature) {
     #main function
     ## Note: GJS modified this function to no longer need to read in matrices from a file, but instead using variables loaded into the workspace
     ## Note: KAW modified this function for shiny progress bar and to fix duplicates
-    CIBERSORT <- function(sig_matrix, mixture_file, perm=0, QN=TRUE, absolute=FALSE, abs_method='sig.score', interruptCallback=function(){}, progressSet=function(){}, progressStart=0.0, progressScale=1.0){
+    CIBERSORT <- function(sig_matrix, mixture_file, perm=0, QN=TRUE, absolute=FALSE, abs_method='sig.score', interruptCallback=function(){}, progressSet=function(){}, progressStart=0.0, progressScale=1.0, currStep=1, totalSteps=1){
       
       if(absolute && abs_method != 'no.sumto1' && abs_method != 'sig.score') stop("abs_method must be set to either 'sig.score' or 'no.sumto1'")
       
@@ -294,7 +294,7 @@ run.DRS <- function(mixture, signature) {
         
         interruptCallback()
 
-        progressSet(value=progressStart + progressScale * (itor-1) / mixtures, message="Step 2/3: Running CIBERSORT", detail=sprintf("%s, please DO NOT refresh or close the page", time.eta))
+        progressSet(value=progressStart + progressScale * (itor-1) / mixtures, message=sprintf("Step %d/%d: Running CIBERSORT", currStep, totalSteps), detail=sprintf("%s, please DO NOT refresh or close the page", time.eta))
         
         y <- Y[,itor]
         
