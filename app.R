@@ -5,6 +5,7 @@ library(ipc)
 library(future)
 library(ggplot2)
 library(promises)
+library(shinythemes)
 
 if(Sys.info()['sysname'] == "Windows") {
     plan(multisession) # forks process so uses > 1GB memory
@@ -59,54 +60,87 @@ accessibleAnalysisFunction <- function(mixture, signature, algorithms, interrupt
 }
 
 # Shiny UI
-ui <- fluidPage(
-    useShinyjs(),
-
-    #Fixes fading out of placeholder when "All" selected
-    tags$style(".bs-placeholder {color: #000000 !important;}"),
-    tags$head(tags$style("#violin{height:80vh !important;}")),
-
-    titlePanel("BrainDeconvShiny"),
-    sidebarLayout(
-        sidebarPanel(
-            div(img(src="ShinyAppFig.jpg",width="80%"), style="text-align: center;"),
-            h5('Shiny web app that takes a user defined expression matrix "mixture", the name of a predefined "signal" and finally a brain tissue subset in order to compare DeconRNASeq and CIBERSORT constituting cell type predictions.'),
-            br(),
-            selectInput("signature", "Signature:",
-                    allSig),
-            pickerInput("celltypes", "Cell types:",
-                allCT, 
-                multiple=TRUE,
-                selected=character(0),
-                choicesOpt=list(disabled = allCT %in% c("Neurons")),
-                options=pickerOptions(noneSelectedText = "All")
-            ),
-            pickerInput("algorithms", "Algorithms:",
-                allAlg,
-                multiple=TRUE,
-                selected=character(0),
-                options=pickerOptions(noneSelectedText = "All")
-            ),
-            fileInput("file", "Mixture:", accept = c(".csv", ".tsv")),
-            
-            p(strong("Run Deconvolution:")),
-
+ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny", 
+    tabPanel("About",
+        verticalLayout(
             fluidRow(
                 column(width = 12, align="center",
-                    actionButton('run', 'run', width='45%'),
-                    actionButton('cancel', 'cancel', width='45%')
+                    wellPanel(
+                        h2("Welcome to BrainDeconvShiny"),
+                        HTML('
+                        <span style="text-align:left;">
+                            <h5>Shiny web app that takes a user defined expression matrix "mixture", the name of a predefined "signal" and finally a brain tissue subset in order to compare DeconRNASeq and CIBERSORT constituting cell type predictions.</h5>
+                            <h5>Developed by <a href="https://www.babs.unsw.edu.au/voineagu-lab">VoineaguLab</a>, view the source code on <a href="https://github.com/Voineagulab/DeconRNAShiny">GitHub</a>.</h5>
+                        </span>
+                        ')
+                    ),
                 ),
             ),
-        ),
-        mainPanel(
-            fluidRow(
-                column(width = 12, align="right",
-                    downloadButton('getDeconRNASeq', 'DeconRNASeq', icon=icon("file-text")),
-                    downloadButton('getCIBERSORT', 'CIBERSORT', icon=icon("file-text")),
-                    downloadButton('getPlot', 'plot', icon = icon("download"))
+            wellPanel(
+                fluidRow(
+                    column(width = 12, align="center",
+                        div(img(src="ShinyAppFig.jpg",width="80%"), style="text-align: center; max-width: 800px;")
+                    )
                 )
             ),
-            plotOutput("violin"),
+            wellPanel(
+                fluidRow(
+                    column(width = 12, align="left",
+                        h5('Shiny web app that takes a user defined expression matrix "mixture", the name of a predefined "signal" and finally a brain tissue subset in order to compare DeconRNASeq and CIBERSORT constituting cell type predictions.'),
+                    )
+                )
+            )
+        )
+    ),
+    tabPanel("Run",
+        # Enables button showing/hiding
+        useShinyjs(),
+
+        # Fixes fading out of placeholder when "All" selected
+        tags$style(".bs-placeholder {color: #000000 !important;}"),
+        tags$head(tags$style("#violin{height:80vh !important;}")),
+
+        # Fixes file select input text overlap
+        tags$head(tags$style("input.form-control{margin-left:10px !important;}")),
+
+        sidebarLayout(
+            sidebarPanel(
+                pickerInput("signature", "Signature:",
+                        allSig),
+                pickerInput("celltypes", "Cell types:",
+                    allCT, 
+                    multiple=TRUE,
+                    selected=character(0),
+                    choicesOpt=list(disabled = allCT %in% c("Neurons")),
+                    options=pickerOptions(noneSelectedText = "All")
+                ),
+                pickerInput("algorithms", "Algorithms:",
+                    allAlg,
+                    multiple=TRUE,
+                    selected=character(0),
+                    options=pickerOptions(noneSelectedText = "All")
+                ),
+                fileInput("file", "Mixture:", accept = c(".csv", ".tsv")),
+                
+                p(strong("Run Deconvolution:")),
+
+                fluidRow(
+                    column(width = 12, align="center",
+                        actionButton('run', 'Run', width='45%'),
+                        actionButton('cancel', 'Cancel', width='45%')
+                    ),
+                ),
+            ),
+            mainPanel(
+                fluidRow(
+                    column(width = 12, align="right",
+                        downloadButton('getDeconRNASeq', 'DeconRNASeq', icon=icon("file-text")),
+                        downloadButton('getCIBERSORT', 'CIBERSORT', icon=icon("file-text")),
+                        downloadButton('getPlot', 'Plot', icon = icon("download"))
+                    )
+                ),
+                plotOutput("violin"),
+            )
         )
     )
 )
@@ -124,38 +158,37 @@ server <- function(input, output, session) {
         toggleState("cancel", is_running())
     })
 
-    sig <- NULL
-    observeEvent(c(input$signature, input$celltypes), {
+    observeEvent(input$signature, {
         # Get vector of selected (character(0) if all)
-        selectedCT <- newSelectedCT <- input$celltypes
+        selectedCT <- input$celltypes
+        enabledCT <- colnames(sigsBrain[[input$signature]])
 
         # Convert character(0) to all
-        if(!isTruthy(selectedCT)) selectedCT <- allCT
+        if(!isTruthy(selectedCT)) selectedCT <- enabledCT
 
-        enabledCT <- colnames(sigsBrain[[input$signature]])
         disabledCT <- !allCT %in% enabledCT
         maskCT <- intersect(selectedCT, enabledCT)
 
-        #TODO: errors if only one selected
-        if(!length(maskCT)) {
-            # Default to all cell types if all user selections are disabled
-            maskCT <- allCT
-            newSelectedCT <- character(0)
-        } 
-        # else if(setequal(maskCT,enabledCT)) {
-        #     # Default to all cell types if user selected all possible options (but save selection?)
-        #     newSelectedCT <- character(0)
-        # }
+        # Default to all cell types if all user selections are disabled
+        if(!length(maskCT)) maskCT <- enabledCT
+
+        newSelectedCT <- if(length(maskCT)==length(enabledCT)) character(0) else maskCT
 
         #Update cell type dropdown based on signature
         updatePickerInput(
             session=session, inputId="celltypes",
-            choices = allCT,
+            choices=allCT,
             selected=newSelectedCT,
-            #choicesOpt=list(disabled = allCT %in% c("Astrocytes"))
             choicesOpt=list(disabled = disabledCT)
         )
-        sig <<- sigsBrain[[input$signature]][maskCT]
+    })
+
+    sigUpdate <- reactive({
+        cts <- input$celltypes
+        if(!isTruthy(cts)) cts <- allCT
+
+        mask <- intersect(cts, colnames(sigsBrain[[input$signature]]))
+        return(sigsBrain[[input$signature]][mask])
     })
 
     algUpdate <- reactive({
@@ -169,8 +202,8 @@ server <- function(input, output, session) {
         if(!is_running()) return(NULL)
 
         disable("cancel")
-        showNotification("cancel request sent to server")
-        inter$interrupt("cancelled")
+        showNotification("Cancel request sent to server")
+        inter$interrupt("Cancelled")
     })
 
     # Handle run button click
@@ -179,9 +212,9 @@ server <- function(input, output, session) {
         is_running(TRUE)
 
         progress <- AsyncProgress$new(message="Initializing", min=0.0, max=1.0, value=0.0)
+        sig <- sigUpdate()
         mix <- mixUpdate()
         algs <- algUpdate()
-        print(sig)
 
         promises::future_promise({
             accessibleAnalysisFunction(mix, sig, algs, inter$execInterrupts, progress$set)
