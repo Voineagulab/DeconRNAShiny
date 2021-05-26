@@ -17,7 +17,10 @@ if(Sys.info()['sysname'] == "Windows") {
 load("Signatures - Brain.rda")
 
 allSig <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
+defaultCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
+otherCT <- c("OPCs", "Excitatory", "Inhibatory")
 allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia", "OPCs", "Excitatory", "Inhibatory")
+choicesCT <- list(Default=defaultCT, Other=otherCT)
 allAlg <- c("DeconRNASeq", "CIBERSORT")
 steps <- c(0.1, 0.8, 0.1)
 stepsStart <- c(0.0, 0.1, 0.9)
@@ -108,11 +111,10 @@ ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny",
                 pickerInput("signature", "Signature:",
                         allSig),
                 pickerInput("celltypes", "Cell types:",
-                    allCT, 
+                    choicesCT, 
                     multiple=TRUE,
                     selected=character(0),
-                    choicesOpt=list(disabled = allCT %in% c("Neurons")),
-                    options=pickerOptions(noneSelectedText = "All")
+                    options=pickerOptions(noneSelectedText = "All Default")
                 ),
                 pickerInput("algorithms", "Algorithms:",
                     allAlg,
@@ -158,13 +160,18 @@ server <- function(input, output, session) {
         toggleState("cancel", is_running())
     })
 
+    userSelectCT <- FALSE
+    observeEvent(input$celltypes, {
+        userSelectCT <<- (length(input$celltypes) > 0)
+    }, ignoreNULL = FALSE)
+
     observeEvent(input$signature, {
         # Get vector of selected (character(0) if all)
         selectedCT <- input$celltypes
         enabledCT <- colnames(sigsBrain[[input$signature]])
 
         # Convert character(0) to all
-        if(!isTruthy(selectedCT)) selectedCT <- enabledCT
+        if(!isTruthy(selectedCT)) selectedCT <- defaultCT
 
         disabledCT <- !allCT %in% enabledCT
         maskCT <- intersect(selectedCT, enabledCT)
@@ -172,12 +179,12 @@ server <- function(input, output, session) {
         # Default to all cell types if all user selections are disabled
         if(!length(maskCT)) maskCT <- enabledCT
 
-        newSelectedCT <- if(length(maskCT)==length(enabledCT)) character(0) else maskCT
+        newSelectedCT <- if(!userSelectCT && setequal(maskCT, intersect(defaultCT, enabledCT)) && !length(setdiff(maskCT, defaultCT))) character(0) else maskCT
 
         #Update cell type dropdown based on signature
         updatePickerInput(
             session=session, inputId="celltypes",
-            choices=allCT,
+            choices=choicesCT,
             selected=newSelectedCT,
             choicesOpt=list(disabled = disabledCT)
         )
