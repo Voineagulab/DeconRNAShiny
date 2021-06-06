@@ -73,7 +73,7 @@ ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny",
                         HTML('
                         <span style="text-align:left;">
                             <h5>Shiny web app that takes a user defined expression matrix "mixture", the name of a predefined "signal" and finally a brain tissue subset in order to compare DeconRNASeq and CIBERSORT constituting cell type predictions.</h5>
-                            <h5>Developed by <a href="https://www.babs.unsw.edu.au/voineagu-lab">VoineaguLab</a>, view the source code on <a href="https://github.com/Voineagulab/DeconRNAShiny">GitHub</a>.</h5>
+                            <h5>Developed by VoineaguLab, view the source code on <a href="https://github.com/Voineagulab/DeconRNAShiny">GitHub</a>.</h5>
                         </span>
                         ')
                     ),
