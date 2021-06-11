@@ -13,10 +13,9 @@ if(Sys.info()['sysname'] == "Windows") {
     plan(multicore) # not available on windows
 }
 
-#Provides "sigsBrain"
-load("Signatures - Brain.rda")
+load("sigsBrain.rda")
 
-allSig <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK")
+allSig <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK", "MB")
 defaultCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
 otherCT <- c("OPCs", "Excitatory", "Inhibatory")
 allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia", "OPCs", "Excitatory", "Inhibatory")
@@ -53,8 +52,8 @@ accessibleAnalysisFunction <- function(mixture, signature, algorithms, interrupt
     # Step 3/3 Calculating GoFs
     interruptCallback()
     progressSet(value=stepsStart[3], message=sprintf("Step %d/%d Calculating GoFs", currStep, totalSteps))
-    if(isTruthy(x)) x2 <- write.gof(mixture, x, signature)
-    if(isTruthy(y)) y2 <- write.gof(mixture, y, signature)
+    if(isTruthy(x)) x2 <- write.gof.v2(mixture, x, signature)
+    if(isTruthy(y)) y2 <- write.gof.v2(mixture, y, signature)
 
     progressSet(value=1.0, message="Done")
     results <- list(x, y, data.frame(Algorithm=append(rep("DeconRNASeq", length(x2$r)), rep("CIBERSORT", length(y2$r))), r=append(x2$r, y2$r)))

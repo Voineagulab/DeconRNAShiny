@@ -6,6 +6,8 @@ load.deps <- function() {
   library(e1071)
   library(parallel)
   library(preprocessCore)
+  library(Metrics)
+  library(DTWBI)
 }
 
 ################################################################################################################################ #
@@ -72,6 +74,57 @@ write.gof <- function(measuredExp, estimatedComp, signatureUsed, returnPred = FA
     }
   
     return(res)
+}
+
+write.gof.v2 <- function(measuredExp, estimatedComp, signatureUsed, returnPred = FALSE) {
+  # set to common row order
+  commonGenes <- rownames(measuredExp)[which(rownames(measuredExp) %in% rownames(signatureUsed))]
+  measuredExp <- measuredExp[commonGenes,]; signatureUsed <- signatureUsed[commonGenes,]  
+  
+  # quantile normalise    
+  qn <- data.frame(signatureUsed, measuredExp)
+  qn <- as.data.frame(normalize.quantiles(as.matrix(qn), copy = FALSE))
+  signatureUsed <- qn[,1:ncol(signatureUsed)]
+  measuredExp <- qn[,-c(1:ncol(signatureUsed))]  
+  
+  # predict expression (predExp) from the estimatedComp * signatureUsed
+  predExp <- as.data.frame(matrix(nrow = length(commonGenes), ncol = ncol(measuredExp)))
+  rownames(predExp) <- commonGenes    
+  
+  for(j in 1:ncol(predExp)) {
+    # storage
+    a <- list()      
+    
+    # the contribution of each cell-type to predicted expression
+    for(k in colnames(signatureUsed)) { a[[k]] <- estimatedComp[j,k] * signatureUsed[,k] }     
+    
+    # sum expression from all cell-types to a single predicted value
+    predExp[,j] <- rowSums(do.call("cbind", a))
+  }
+    
+  ## Calculate statistics
+  stats <- as.data.frame(matrix(ncol = 5, nrow = ncol(measuredExp)))
+  colnames(stats) <- c("rho", "r", "mae", "rmse", "nmae")
+  rownames(stats) <- colnames(measuredExp)    
+  for(j in 1:ncol(measuredExp)) { 
+    a <- measuredExp[,j]
+    b <- predExp[,j]      
+    stats$r[j] <- cor(log2(a+0.5), log2(b+0.5), method = "p")
+    stats$rho[j] <- cor(a, b, method = "s")      
+    stats$mae[j] <- mae(a, b) 
+    stats$rmse[j] <- rmse(a, b)       
+    stats$nmae[j] <- compute.nmae(a, b)     
+  }  
+  # return
+  if(returnPred) {
+    res <- list()
+    res$predExp <- predExp
+    res$stats <- stats  
+  } else {
+    res <- stats
+  }    
+  
+  return(res)
 }
 
 ## Code to run CIBERSORT
