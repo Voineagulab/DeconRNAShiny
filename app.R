@@ -20,7 +20,7 @@ defaultCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endoth
 otherCT <- c("OPCs", "Excitatory", "Inhibatory")
 allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia", "OPCs", "Excitatory", "Inhibatory")
 choicesCT <- list(Default=defaultCT, Other=otherCT)
-allAlg <- c("DeconRNASeq", "CIBERSORT")
+allAlg <- c("dtangle", "CIBERSORT")
 steps <- c(0.1, 0.8, 0.1)
 stepsStart <- c(0.0, 0.1, 0.9)
 empty <- list(NULL, NULL, data.frame(Algorithm=append(rep(allAlg[1], 3), rep(allAlg[2], 3)), r=rep(0, 6)))
@@ -35,11 +35,11 @@ accessibleAnalysisFunction <- function(mixture, signature, algorithms, interrupt
 
     x <- y <- x2 <- y2 <- NULL
 
-    if(is.element("DeconRNASeq", algorithms)) {
-        # Step 1/3: Running DeconRNASeq
+    if(is.element("dtangle", algorithms)) {
+        # Step 1/3: Running dtangle
         interruptCallback()
-        progressSet(value=stepsStart[1], message=sprintf("Step %d/%d: Running DeconRNASeq", currStep, totalSteps))
-        x <- run.DRS(mixture,signature)
+        progressSet(value=stepsStart[1], message=sprintf("Step %d/%d: Running dtangle", currStep, totalSteps))
+        x <- run.DTA(mixture,signature)
         currStep <- currStep + 1
     }
 
@@ -56,7 +56,7 @@ accessibleAnalysisFunction <- function(mixture, signature, algorithms, interrupt
     if(isTruthy(y)) y2 <- write.gof.v2(mixture, y, signature)
 
     progressSet(value=1.0, message="Done")
-    results <- list(x, y, data.frame(Algorithm=append(rep("DeconRNASeq", length(x2$r)), rep("CIBERSORT", length(y2$r))), r=append(x2$r, y2$r)))
+    results <- list(x, y, data.frame(Algorithm=append(rep("dtangle", length(x2$r)), rep("CIBERSORT", length(y2$r))), r=append(x2$r, y2$r)))
 
     return(results)
 }
@@ -105,8 +105,8 @@ ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny",
                             <dl>
                                 <dt>CIBERSORT v1.04 </dt>
                                 <dd>obtained from https://cibersort.stanford.edu with default parameters.</dd>
-                                <dt>DeconRNASeq v1.26 </dt>
-                                <dd>using the DeconRNASeq Bioconductor R package with default parameters.</dd>
+                                <dt>dtangle v2.09 </dt>
+                                <dd>using the dtangle Cran R package with default parameters.</dd>
                             </dl>
                             <h5>And the following cell-type signatures:</h5>
                             <dl>
@@ -181,7 +181,7 @@ ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny",
             mainPanel(
                 fluidRow(
                     column(width = 12, align="right",
-                        downloadButton('getDeconRNASeq', 'DeconRNASeq', icon=icon("file-text")),
+                        downloadButton('getdtangle', 'dtangle', icon=icon("file-text")),
                         downloadButton('getCIBERSORT', 'CIBERSORT', icon=icon("file-text")),
                         downloadButton('getPlot', 'Plot', icon = icon("download"))
                     )
@@ -311,14 +311,14 @@ server <- function(input, output, session) {
 
     # Showing download buttons
     result_val_observer <- observe({
-        toggleState("getDeconRNASeq", result_val()[[1]])
+        toggleState("getdtangle", result_val()[[1]])
         toggleState("getCIBERSORT", result_val()[[2]])
         toggleState("getPlot", result_val()[[1]] != NULL || result_val()[[2]] != NULL)
     })
 
     # Downloading files
-    output$getDeconRNASeq <- downloadHandler(
-        filename = function() {"DeconRNASeq.csv"},
+    output$getdtangle <- downloadHandler(
+        filename = function() {"dtangle.csv"},
         content = function(file) {write.csv(result_val()[[1]], file)}
     )
     output$getCIBERSORT <- downloadHandler(

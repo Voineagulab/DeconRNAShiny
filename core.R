@@ -2,7 +2,8 @@
 ## Load dependencies ----     
 
 load.deps <- function() {
-  library(DeconRNASeq)
+  #library(DeconRNASeq)
+  library(dtangle)
   library(e1071)
   library(parallel)
   library(preprocessCore)
@@ -393,6 +394,28 @@ run.DRS <- function(mixture, signature) {
       if(!absolute){colnames(obj) <- c(colnames(X),"P-value","Correlation","RMSE")}
       else{colnames(obj) <- c(colnames(X),"P-value","Correlation","RMSE",paste('Absolute score (',abs_method,')',sep=""))}
       obj
+    }
+
+    run.DTA <- function(mixture, signature, alg = "diff", q = 0.01) { # alg %in% c("diff", "ratio", "p.value", "regression")
+      # bind dataframes
+      common <- rownames(mixture)[which(rownames(mixture) %in% rownames(signature))]
+      dat <- cbind(log2(mixture[common,] + 0.5), log2(signature[common,] + 0.5))
+      dat <- as.data.frame(t(dat))  # define where signature samples reside in dat
+      ps <- list()
+      for (j in colnames(signature)) { ps[[j]] <- grep(paste0("^", j, "$"), rownames(dat)) }  # find markers
+      markers <- find_markers(dat, marker_method = alg, data_type = "rna-seq", pure_samples = ps)  # deconvolve
+      quant <- lapply(markers$V, function(x) { quantile(x, 1-q) } )
+      for (j in 1:length(quant)) {
+        if (quant[j] == Inf) { quant[j] <- max(grep("Inf", markers$V[[j]]) + 1) } # a hack for when there are more "infs" than q markers
+      }
+      n <- sapply(1:length(markers$V), function(i) { max(which(markers$V[[i]] > quant[[i]])) } )
+      res <- as.data.frame(dtangle(Y = dat, 
+                                  pure_samples = ps, 
+                                  markers = markers$L, 
+                                  n_markers = n, 
+                                  marker_method = alg, 
+                                  data_type = "rna-seq")$estimates)  # return(res)
+      return(res[1:(nrow(res) - ncol(signature)),])
     }
 
     
