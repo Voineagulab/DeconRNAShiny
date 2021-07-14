@@ -167,7 +167,8 @@ ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny",
                     selected=character(0),
                     options=pickerOptions(noneSelectedText = "All")
                 ),
-                fileInput("file", "Mixture:", accept = c(".csv", ".tsv")),
+                a(href="mixture.csv", "Mixture: (see example)", download=NA, target="_blank"),
+                fileInput("file", NULL, accept = c(".csv", ".tsv")),
                 
                 p(strong("Run Deconvolution:")),
 
