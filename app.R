@@ -7,6 +7,8 @@ library(ggplot2)
 library(promises)
 library(shinythemes)
 
+options(shiny.maxRequestSize=500*1024^2) #Raises max file size to 500MB
+
 if(Sys.info()['sysname'] == "Windows") {
     plan(multisession) # forks process so uses > 1GB memory
 } else {

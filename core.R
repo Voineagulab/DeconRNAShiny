@@ -2,7 +2,7 @@
 ## Load dependencies ----     
 
 load.deps <- function() {
-  #library(DeconRNASeq)
+  library(DeconRNASeq)
   library(dtangle)
   library(e1071)
   library(parallel)
