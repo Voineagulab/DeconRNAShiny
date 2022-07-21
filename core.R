@@ -399,23 +399,50 @@ run.DRS <- function(mixture, signature) {
     run.DTA <- function(mixture, signature, alg = "diff", q = 0.01) { # alg %in% c("diff", "ratio", "p.value", "regression")
       # bind dataframes
       common <- rownames(mixture)[which(rownames(mixture) %in% rownames(signature))]
+      
+      if(length(common) == 0) {
+        stop("No Ensembl IDs/rownames matching signature (make sure version IDs are removed)")
+      }
+
       dat <- cbind(log2(mixture[common,] + 0.5), log2(signature[common,] + 0.5))
       dat <- as.data.frame(t(dat))  # define where signature samples reside in dat
       ps <- list()
       for (j in colnames(signature)) { ps[[j]] <- grep(paste0("^", j, "$"), rownames(dat)) }  # find markers
+      
       markers <- find_markers(dat, marker_method = alg, data_type = "rna-seq", pure_samples = ps)  # deconvolve
+      
+      # Remove empty (empty markers$V list causes NA in quant)
+      whichEmpty <- sapply(markers$V, function(a) length(a) == 0)
+      markers$V <- markers$V[!whichEmpty]
+      markers$L <- markers$L[!whichEmpty]
+      dat <- dat[which(rownames(dat) %in% c(colnames(mixture), names(markers$V))),] #This causes NAs ??
+      ps <- list()
+      for (j in names(whichEmpty[!whichEmpty])) { ps[[j]] <- grep(paste0("^", j, "$"), rownames(dat)) }  # find markers
+      
       quant <- lapply(markers$V, function(x) { quantile(x, 1-q) } )
+
       for (j in 1:length(quant)) {
         if (quant[j] == Inf) { quant[j] <- max(grep("Inf", markers$V[[j]]) + 1) } # a hack for when there are more "infs" than q markers
       }
+      
       n <- sapply(1:length(markers$V), function(i) { max(which(markers$V[[i]] > quant[[i]])) } )
+      
+      if(any(n <= 0)) {
+        n <- NULL
+      }
+      
       res <- as.data.frame(dtangle(Y = dat, 
                                   pure_samples = ps, 
                                   markers = markers$L, 
                                   n_markers = n, 
                                   marker_method = alg, 
                                   data_type = "rna-seq")$estimates)  # return(res)
-      return(res[1:(nrow(res) - ncol(signature)),])
+
+      
+      res <- res[1:(nrow(res) - length(markers$V)),]
+      res[names(whichEmpty[whichEmpty])] <- NA
+      
+      return(res)
     }
 
     

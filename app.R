@@ -1,26 +1,28 @@
 library(shiny)
-library(shinyWidgets)
 library(shinyjs)
+library(shinyWidgets)
 library(ipc)
 library(future)
 library(ggplot2)
 library(promises)
 library(shinythemes)
 
-options(shiny.maxRequestSize=500*1024^2) #Raises max file size to 500MB
+# Increase file size limit to 500MB if run locally
+megabyteFileLimit <- if(Sys.getenv('SHINY_PORT') == "") 500 else 10
+options(shiny.maxRequestSize=(megabyteFileLimit*1024^2))
 
 if(Sys.info()['sysname'] == "Windows") {
     plan(multisession) # forks process so uses > 1GB memory
 } else {
-    plan(multicore) # not available on windows
+    plan(multicore, workers=2) # not available on windows
 }
 
 load("sigsBrain.rda")
 
 allSig <- c("F5", "IP", "DM", "MM", "VL", "NG", "CA", "TS", "LK", "MB")
 defaultCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia")
-otherCT <- c("OPCs", "Excitatory", "Inhibatory")
-allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia", "OPCs", "Excitatory", "Inhibatory")
+otherCT <- c("OPCs", "Excitatory", "Inhibitory")
+allCT <- c("Neurons", "Astrocytes", "Oligodendrocytes", "Microglia", "Endothelia", "OPCs", "Excitatory", "Inhibitory")
 choicesCT <- list(Default=defaultCT, Other=otherCT)
 allAlg <- c("dtangle", "CIBERSORT")
 steps <- c(0.1, 0.8, 0.1)
@@ -54,12 +56,15 @@ accessibleAnalysisFunction <- function(mixture, signature, algorithms, interrupt
     # Step 3/3 Calculating GoFs
     interruptCallback()
     progressSet(value=stepsStart[3], message=sprintf("Step %d/%d Calculating GoFs", currStep, totalSteps))
-    if(isTruthy(x)) x2 <- write.gof.v2(mixture, x, signature)
+    if(isTruthy(x)) {
+        x2 <- x
+        x2[is.na(x2)] <- 0
+        x2 <- write.gof.v2(mixture, x2, signature)
+    }
     if(isTruthy(y)) y2 <- write.gof.v2(mixture, y, signature)
 
     progressSet(value=1.0, message="Done")
     results <- list(x, y, data.frame(Algorithm=append(rep("dtangle", length(x2$r)), rep("CIBERSORT", length(y2$r))), r=append(x2$r, y2$r)))
-
     return(results)
 }
 
@@ -136,7 +141,15 @@ ui <- navbarPage(theme = shinytheme("paper"), "BrainDeconvShiny",
                             <p>All signatures are cortical in origin but represent a range of purification protocols (scRNA-seq by SmartSeq (DM), snRNA-seq by 10X (VL, NG), snRNA-seq by SmartSeq (CA), and immuno-panning (IP)). Detailed information on data processing and normalisation for cell-ype signatures is available in the Methods section, Sutton et al. 2021 (https://www.biorxiv.org/content/10.1101/2020.06.01.126839v1).</p>
 
                             <p>Goodness of fit is evaluated using a Pearson correlation coefficient calculated for each sample between the bulk gene expression data and the gene expression data reconstructed with a given cell-type signature and the corresponding estimated cell type proportions.</p>
-                            </span>'),
+                            <h5>Getting started:</h5>
+                            <dl>
+                                <dt>Prepare your mixture in R</dt>
+                                <dd>Expression data with Ensembl IDs as rows and sample names as columns. Comma or tab delimited is acceptible, but note Ensembl IDs must not have version numbers and must be unique.
+                                There is a file size limit of 10MB, the bar will go red if this is exceeded - this is mainly due to CIBERSORT time constraints.
+                                </dd>
+                            </dl>
+                            </span>
+                            '),
                     )
                 )
             )
@@ -263,7 +276,7 @@ server <- function(input, output, session) {
 
     # Handle run button click
     observeEvent(input$run,{
-        if(is_running() || !mixUpdate()) return(NULL)
+        if(is_running() || is.null(mixUpdate())) return(NULL)
         is_running(TRUE)
 
         progress <- AsyncProgress$new(message="Initializing", min=0.0, max=1.0, value=0.0)
@@ -275,6 +288,11 @@ server <- function(input, output, session) {
             accessibleAnalysisFunction(mix, sig, algs, inter$execInterrupts, progress$set)
         }) %>% then(
             onFulfilled = function(value) {
+                missingMarkers = names(which(colSums(is.na(value[[1]])) > 0))
+                if (length(missingMarkers) > 0) {
+                    showNotification(paste0("WARNING: no dtangle markers found for ", paste(missingMarkers, collapse=', ')))
+                }
+
                 result_val(value)
             },
             onRejected = function(err) {
@@ -285,8 +303,6 @@ server <- function(input, output, session) {
             progress$close()
             is_running(FALSE)
         })
-
-        # Return something other than the future so we don't block the UI
         return(NULL)
     })
 
@@ -294,11 +310,22 @@ server <- function(input, output, session) {
     mixUpdate <- reactive({
         validate(need(input$file, 'No file; Please upload a .csv or.tsv file'))
         ext <- tools::file_ext(input$file$name)
-        switch(ext,
-            csv = read.table(input$file$datapath, sep=",", header=TRUE, row.names=1),
-            tsv = read.table(input$file$datapath, sep="\t", header=TRUE, row.names=1),
-            validate("Invalid file; Please upload a .csv or .tsv file")
-        )
+
+        mix <- NULL
+        tryCatch({
+            mix <- switch(ext,
+                csv = read.table(input$file$datapath, sep=",", header=TRUE, row.names=1),
+                tsv = read.table(input$file$datapath, sep="\t", header=TRUE, row.names=1),
+                {
+                    showNotification("Invalid file; Please upload a .csv or .tsv file")
+                    return(NULL)
+                }
+            )
+        }, error = function(e) {
+            showNotification("Invalid file; Ensure rows are unique and do not have Ensembl version suffix")
+            return(NULL)
+        })
+        return(mix)
     })
 
     # Update plot for rendering and downloading
@@ -316,7 +343,7 @@ server <- function(input, output, session) {
     result_val_observer <- observe({
         toggleState("getdtangle", result_val()[[1]])
         toggleState("getCIBERSORT", result_val()[[2]])
-        toggleState("getPlot", result_val()[[1]] != NULL || result_val()[[2]] != NULL)
+        toggleState("getPlot", !is.null(result_val()[[1]]) || !is.null(result_val()[[2]]))
     })
 
     # Downloading files
